@@ -1,0 +1,32 @@
+services:
+  nybackup:
+    build: .
+    image: nybackup:latest
+    container_name: nybackup
+    ports:
+      - "8000:8000"
+    environment:
+      TZ: America/New_York
+      SOURCE_DB: /app/data/jobs.db
+      STATE_DB: /app/data/state.db
+      BACKUP_DIR: /app/backups
+      TICK_SECONDS: "1"
+      PORT: "8000"
+    volumes:
+      - ny-data:/app/data
+      - ny-backups:/app/backups
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ny-data:
+  ny-backups:

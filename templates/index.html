@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纽约分部 · SQLite 作业库每日备份</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1>纽约分部 · SQLite 作业库每日备份</h1>
+  <div class="clockbox">
+    <div><span class="label">演练时钟（纽约）</span>
+      <strong>{{ now_virtual|local }}</strong></div>
+    <div><span class="label">真实时钟（纽约）</span>
+      {{ now_real|local }}</div>
+    <div><span class="label">时钟偏移</span>
+      {{ settings.clock_offset_seconds|offset }}
+      {% if settings.clock_offset_seconds %}<span class="badge drill">演练中</span>{% endif %}</div>
+    {% if upcoming %}
+    <div><span class="label">下一次到期</span>
+      {{ upcoming.local.strftime('%Y-%m-%d %H:%M') }} 纽约时间
+      <span class="muted">（{{ upcoming.instant|local }}）</span></div>
+    {% endif %}
+  </div>
+</header>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  <div class="flashes">
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endwith %}
+
+<main>
+<section class="card">
+  <h2>备份计划（按计划日期）</h2>
+  <p class="hint">
+    每日 {{ settings.backup_time }}（{{ settings.timezone }}）自动备份。
+    春季跳时：设定时刻不存在时顺延到跳时后的第一个有效分钟；秋季重复时刻取第一次。
+    停机错过多次时只补最近一次，仍归原计划日期。
+  </p>
+  <table class="plans">
+    <thead>
+      <tr>
+        <th>计划日期</th>
+        <th>计划时刻（纽约）</th>
+        <th>状态</th>
+        <th>实际完成时间（纽约）</th>
+        <th>文件</th>
+        <th>大小</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr class="{% if row.is_today %}today{% endif %} status-{{ row.plan.status if row.plan else 'none' }}">
+        <td>
+          {{ row.iso }}
+          {% if row.is_today %}<span class="badge">今天</span>{% endif %}
+        </td>
+        <td>
+          {% if row.slot %}
+            {{ row.slot.local.strftime('%H:%M') }}
+            {% if row.slot.shifted %}<span class="badge warn" title="{{ row.slot.note }}">顺延</span>{% endif %}
+            {% if row.slot.ambiguous %}<span class="badge warn" title="{{ row.slot.note }}">重复时刻取首次</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if row.plan %}
+            <span class="status">{{ row.plan.status }}</span>
+            {% if row.plan.status == 'skipped' %}<span class="muted">（补跑规则跳过）</span>{% endif %}
+            {% if row.plan.error %}<div class="muted small">{{ row.plan.error }}</div>{% endif %}
+          {% elif row.is_future %}
+            <span class="status pending">待到期</span>
+          {% else %}
+            <span class="status none">无记录</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if row.plan and row.plan.completed_utc %}
+            {{ row.plan.completed_utc|local }}
+            {% if row.plan.completed_real_utc %}
+              <div class="muted small">真实 {{ row.plan.completed_real_utc|local }}</div>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td class="mono">
+          {% if row.plan and row.plan.filename %}{{ row.plan.filename }}{% else %}—{% endif %}
+        </td>
+        <td>{{ row.plan.size_bytes|size if row.plan else '—' }}</td>
+        <td class="actions">
+          {% if row.downloadable %}
+            <a class="button" href="{{ url_for('download', iso_date=row.iso) }}">下载</a>
+          {% else %}
+            <span class="muted">不可下载</span>
+          {% endif %}
+          {% if (not row.plan or row.plan.status in ('pending','failed','skipped')) and row.slot and not row.is_future %}
+            <form method="post" action="{{ url_for('run_plan', iso_date=row.iso) }}">
+              <button class="button ghost" type="submit">立即备份</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div class="grid">
+  <section class="card">
+    <h2>追加样例记录</h2>
+    <p class="muted small">当前源库 {{ stats.jobs }} 条作业 / {{ stats.events }} 条事件 / 写入计数 {{ stats.write_seq }} / {{ stats.size|size }}</p>
+    <form method="post" action="{{ url_for('append') }}" class="stack">
+      <label>标题 <input name="title" placeholder="例如：冷库压缩机巡检" maxlength="200"></label>
+      <label>站点 <input name="site" placeholder="例如：布鲁克林" maxlength="80"></label>
+      <button class="button" type="submit">追加记录</button>
+    </form>
+    <table class="jobs">
+      <thead><tr><th>#</th><th>标题</th><th>站点</th><th>状态</th><th>创建（UTC）</th></tr></thead>
+      <tbody>
+      {% for job in jobs %}
+        <tr><td>{{ job.id }}</td><td>{{ job.title }}</td><td>{{ job.site }}</td>
+            <td>{{ job.status }}</td><td class="mono small">{{ job.created_utc }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>设置每日备份时刻</h2>
+    <form method="post" action="{{ url_for('settings') }}" class="stack">
+      <label>时刻（纽约时间，HH:MM）
+        <input name="backup_time" value="{{ settings.backup_time }}" pattern="^([01][0-9]|2[0-3]):[0-5][0-9]$" required>
+      </label>
+      <button class="button" type="submit">保存</button>
+    </form>
+
+    <h2>调整演练时钟</h2>
+    <form method="post" action="{{ url_for('clock') }}" class="stack">
+      <label>偏移秒数（正数=向未来）
+        <input name="offset_seconds" type="number" step="1" value="{{ settings.clock_offset_seconds|int }}">
+      </label>
+      <button class="button" type="submit">应用偏移</button>
+    </form>
+    <form method="post" action="{{ url_for('clock_jump') }}" class="stack">
+      <label>跳转到（纽约本地时间）
+        <input name="target" type="datetime-local" required>
+      </label>
+      <button class="button" type="submit">跳转</button>
+    </form>
+    <form method="post" action="{{ url_for('clock_reset') }}">
+      <button class="button ghost" type="submit">复位为真实时间</button>
+    </form>
+  </section>
+</div>
+
+<section class="card">
+  <h2>最近事件</h2>
+  <table class="events">
+    <thead><tr><th>演练时间</th><th>真实时间</th><th>级别</th><th>内容</th></tr></thead>
+    <tbody>
+    {% for event in events %}
+      <tr class="level-{{ event.level }}">
+        <td class="mono small">{{ event.ts_utc|local }}</td>
+        <td class="mono small">{{ event.real_ts_utc|local }}</td>
+        <td>{{ event.level }}</td>
+        <td class="pre">{{ event.message }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">暂无事件</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+</main>
+<footer>
+  <span class="muted small">
+    备份文件为独立 SQLite（journal_mode=delete，无 -wal/-shm 伴随文件）；
+    未完整落盘的残件不会出现在下载列表。
+  </span>
+</footer>
+</body>
+</html>

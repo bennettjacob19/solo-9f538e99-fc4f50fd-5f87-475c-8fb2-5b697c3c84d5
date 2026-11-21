@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+backups/
+sample/*.sqlite-wal
+sample/*.sqlite-shm
+.pytest_cache/
+*.tmp
+*.partial
+*.corrupt
